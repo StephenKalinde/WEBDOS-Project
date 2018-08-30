@@ -1,13 +1,17 @@
 package com.sitegenerator;
 
 import java.io.File;
-import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Scanner;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Class to create html pages from directory objects using a template
@@ -24,16 +28,28 @@ public class PageCreator {
     private static final String PAGE_HEADING="$pageHeading";
     private static final String STYLE_SHEET="$stylesheet";
 
-    public static final String SITE_FOLDER="MyStaticSite";
-    public static final String THUMBNAIL_FOLDER="thumbs";
+    static final String SITE_FOLDER="MyStaticSite";
+    static final String THUMBNAIL_FOLDER="thumbs";
 
     private String siteDirectoryString;
+    private Path sitePagesFolderPath;
     private String workingDirectory;
     private StringBuffer templateBuffer;
+    private List<Directory> directories;
 
-    PageCreator(String siteDirectory){
+    private PageCreator(String siteDirectory){
         this.siteDirectoryString =siteDirectory;
+        directories=new ArrayList<>();
+        this.createSiteFolder();
         getTemplate();
+        this.writeStyleSheet();
+    }
+
+    PageCreator(String path, List<Directory> directories) {
+        this(path);
+        this.directories=directories;
+        makeHomePage();
+        
     }
 
     /**
@@ -42,13 +58,13 @@ public class PageCreator {
     private void getTemplate(){
         templateBuffer=new StringBuffer();
 
-        Path path= Paths.get(System.getProperty("user.dir"),"template.html");
-        workingDirectory=path.getParent().toString();
+        workingDirectory=Paths.get(System.getProperty("user.dir")).toString();//path.getParent().toString();
 
         try {
-            Scanner scanner=new Scanner(Files.newInputStream(path));
+            Scanner scanner=new Scanner(getClass().getResourceAsStream("template.html"));
             while (scanner.hasNextLine()){
                 templateBuffer.append(scanner.nextLine()).append("\n");
+              
             }
             scanner.close();
 
@@ -56,20 +72,65 @@ public class PageCreator {
             e.printStackTrace();
         }
     }
+    
+    private void writeStyleSheet(){
+       
+        Path dest=this.sitePagesFolderPath.resolve("styleTemplate.css");
+        
+        try {
+            InputStream input=getClass().getResourceAsStream("styleTemplate.css");
+            PrintStream output=new PrintStream(Files.newOutputStream(dest));
+            Scanner scanner=new Scanner(input);
+            while(scanner.hasNextLine()){
+                output.println(scanner.nextLine());
+            }
+            scanner.close();
+            output.close();
+        } catch (IOException ex) {
+            Logger.getLogger(PageCreator.class.getName()).log(Level.SEVERE, null, ex);
+        }
+    }
+    
+    private void makeHomePage(){
+        String htmlPageString=templateBuffer.toString();
+        htmlPageString=htmlPageString
+                .replace(TITLE,"home")
+                .replace(PAGE_HEADING,"Home")
+                .replace(STYLE_SHEET,siteDirectoryString+"/"+SITE_FOLDER+"/styleTemplate.css");
+
+        htmlPageString=addMenu(directories,htmlPageString);
+        htmlPageString=addHomePageContent(htmlPageString);
+        writePage(htmlPageString,null);
+    }
+    
+    private String addHomePageContent(String htmlString){
+         StringBuilder builder=new StringBuilder();
+         builder.append("<p>")
+                 .append("This is your static site home page.")
+                 .append(" Select an item on the menu to navigate to a page")
+                 .append("<p>");
+
+           return htmlString.replace(BODY,builder.toString());
+    }
+    
+     public void createPages(){
+        for(Directory dir:directories){
+            this.createPageFromDirectory(dir);
+        }
+    }
+    
 
     /**
      *
-     * @param directoryIndex the position at which the directory can be found in the list of directories
-     * @param directories the list of directories used primarily to generate a menu for navigation
+     * @param directory the directory from which a page will be created
      */
-    void createPageFromDirectory(int directoryIndex,List<Directory> directories){
-        Directory directory=directories.get(directoryIndex);
-
+    void createPageFromDirectory(Directory directory){
+       
         String htmlPageString=templateBuffer.toString();
         htmlPageString=htmlPageString
                 .replace(TITLE,directory.getName())
                 .replace(PAGE_HEADING,directory.getName())
-                .replace(STYLE_SHEET,workingDirectory+"/styleTemplate.css");
+                .replace(STYLE_SHEET,siteDirectoryString+"/"+SITE_FOLDER+"/styleTemplate.css");
 
         htmlPageString=addMenu(directories,htmlPageString);
         htmlPageString=addContent(directory,htmlPageString);
@@ -111,10 +172,16 @@ public class PageCreator {
     private String addContent(Directory directory,String htmlString){
         StringBuilder builder=new StringBuilder();
         for(Content content:directory.getContentList()){
+            String thumbString=String.format("%s/%s/%s",this.siteDirectoryString,
+                    THUMBNAIL_FOLDER,thumbnailName(content.getName()));
+            Path thumbPath=Paths.get(thumbString);
+            if(!Files.exists(thumbPath)){
+                thumbString=thumbString.replace(thumbnailName(content.getName()),"default.jpg");
+            }
             builder.append("\n<div class=\"thumb\">")
                     .append("<a href=\"").append(content.getPath().toString()).append("\">")
-                    .append("<img src=").append(siteDirectoryString).append("thumbs/")
-                    .append(thumbnailName(content.getName()))
+                    .append("<img src=")
+                    .append(thumbString)
                     .append(">").append("</a>")
                     .append("<p>").append(content.getName())
                     .append("</p>")
@@ -142,7 +209,13 @@ public class PageCreator {
             File file=new File(siteDirectoryString+separator+SITE_FOLDER
                     +separator);
             file.mkdirs();
-            Path path=Paths.get(file.getPath(),directory.getName()+".html");
+             Path path=Paths.get(file.getPath());
+            if(directory!=null){
+                path=path.resolve(directory.getName()+".html");
+            }
+            else {
+                path=path.resolve("index.html");
+            }
             PrintStream printStream=new PrintStream(Files.newOutputStream(path));
 
             Scanner scanner=new Scanner(htmlString);
@@ -156,6 +229,24 @@ public class PageCreator {
             e.printStackTrace();
         }
     }
+    
+    private void createSiteFolder(){
+            String separator= File.separator;
+            File file=new File(siteDirectoryString+separator+SITE_FOLDER
+                    +separator);
+            file.mkdirs();
+            this.sitePagesFolderPath=Paths.get(file.getPath());
+    }
+    
+    public Path siteFolderPath(){
+        return this.sitePagesFolderPath;
+    }
+    
+    Path homePagePath(){
+        return this.sitePagesFolderPath.resolve("index.html");
+    }
+    
+   
 
 
 }
